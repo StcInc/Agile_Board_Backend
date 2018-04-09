@@ -5,6 +5,7 @@ const fmt = nodeUtil.format;
 const redis = require("redis");
 
 const express = require('express');
+const cors = require('cors');
 const bodyParser = require('body-parser');
 
 const PROJECT_NAME_PREFIX = "Project";
@@ -13,7 +14,7 @@ const COLUMN_NAME_PREFIX = "Column";
 // redis connection init
 const redisClient = redis.createClient(cfg.redis);
 // if you'd like to select database 3, instead of 0 (default), call
-// redisClient.select(3, function() { /* ... */ });
+redisClient.select(6, function() { /* ... */ });
 
 redisClient.on('connect', function() {
   console.log('Connected to redis, with config:', cfg.redis)
@@ -53,7 +54,8 @@ function findLargestNumUsed(items, fieldName, prefix) {
 
 
 // express init
-var app = express()
+var app = express();
+app.use(cors());
 app.use(bodyParser.json());
 
 app.get('/', function (req, res) {
