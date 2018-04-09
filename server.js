@@ -73,6 +73,7 @@ app.get('/', function (req, res) {
 
 
 // Actual api request handling
+
 // tested
 app.get('/GetProjects', function (req, res) {  // no params
     /*
@@ -98,7 +99,7 @@ app.get('/GetProjects', function (req, res) {  // no params
     });
 });
 
-// TODO: find bug
+//tested
 app.get('/GetColumnsByProject', function (req, res) { // params: projectId
     /*
     GET GetColumnsByProject :: projectId:string -> Column[]
@@ -118,7 +119,7 @@ app.get('/GetColumnsByProject', function (req, res) { // params: projectId
                 projectColIds = JSON.parse(projectColIds);
                 function requestColumn(i, acc) {
                     if (i >= 0) {
-                        redisClient("Columns", projectColIds[i], function (err, column) {
+                        redisClient.hget("Columns", projectColIds[i], function (err, column) {
                             if (err) {
                                 console.error(err);
                             }
@@ -134,6 +135,9 @@ app.get('/GetColumnsByProject', function (req, res) { // params: projectId
                     }
                 }
                 requestColumn(projectColIds.length -1, []);
+            }
+            else {
+                res.send([]);
             }
         });
     }
@@ -265,7 +269,7 @@ app.post('/SetProjectName', function (req, res) { //params: projectId, projectNa
     }
 });
 
-// TODO: check and reimplement some stuff
+// tested
 app.post('/MoveTicketToColumn', function (req, res) { // params: fromColumnId, toColumnId, ticketId, index
     /*
     POST MoveTicketToColumn :: fromColumnId:string -> toColumnId:string -> ticketId:string -> index:int -> bool
@@ -285,43 +289,44 @@ app.post('/MoveTicketToColumn', function (req, res) { // params: fromColumnId, t
                 console.error(err);
                 res.send("false");
             }
-            else {
-                redisClient.hget("Column-tickets", req.query.fromColumnId, function (err, fromColTicketIds) {
+            else if (ticket) {
+                redisClient.hget("Column-tickets", req.query.fromColumnId, function (err, srcColTicketIds) {
                     if (err) {
                         console.error(err);
                         res.send("false");
                     }
-                    else {
-                        fromColTicketIds = JSON.parse(fromColTicketIds);
-                        newFromColTicketIds = fromColTicketIds.filter(function (id) { return id !== req.query.ticketId; });
-                        if (fromColTicketIds.length > newFromColTicketIds.length) {
+                    else if (srcColTicketIds) {
+                        srcColTicketIds = JSON.parse(srcColTicketIds);
+                        filteredSrcColTicketIds = srcColTicketIds.filter(function (id) { return id !== req.query.ticketId; });
+                        if (srcColTicketIds.length > filteredSrcColTicketIds.length) {
                             redisClient.hget("Columns", req.query.toColumnId, function (err, destColumn) {
                                 if (err) {
                                     console.error(err);
                                     res.send("false");
                                 }
-                                else {
-                                    redisClient.get("Column-tickets", req.query.toColumnId, function (err, destColTicketIds){
+                                else if (destColumn) {
+                                    redisClient.hget("Column-tickets", req.query.toColumnId, function (err, destColTicketIds){
                                         if (err) {
                                             console.error(err);
-                                            var destColTicketIds = [];
+                                            destColTicketIds = [];
+                                        }
+                                        else if (destColTicketIds) {
+                                            destColTicketIds = JSON.parse(destColTicketIds);
                                         }
                                         else {
-                                            if (destColTicketIds) {
-                                                destColTicketIds = JSON.parse(destColTicketIds);
-                                            }
-                                            else {
-                                                destColTicketIds = [];
-                                            }
+                                            destColTicketIds = [];
                                         }
-                                        destColTicketIds.push(ticket.TicketId); // TODO: insert into `req.query.index` position
+                                        destColTicketIds.splice(req.query.index, 0, req.query.ticketId);
 
                                         redisClient.hset("Column-tickets", req.query.toColumnId, JSON.stringify(destColTicketIds), function () {
-                                            redisClient.hset("Column-tickets", req.query.fromColumnId, JSON.stringify(newFromColTicketIds), function () {
+                                            redisClient.hset("Column-tickets", req.query.fromColumnId, JSON.stringify(filteredSrcColTicketIds), function () {
                                                 res.send("true");
                                             });
                                         });
                                     });
+                                }
+                                else {
+                                    res.send("false");
                                 }
                             });
                         }
@@ -329,7 +334,13 @@ app.post('/MoveTicketToColumn', function (req, res) { // params: fromColumnId, t
                             res.send("false");
                         }
                     }
+                    else {
+                        res.send("false");
+                    }
                 });
+            }
+            else {
+                res.send("false");
             }
         });
     }
@@ -456,6 +467,42 @@ app.post('/AddNewProject', function (req, res) { // no params
     });
 });
 
+//tested
+app.post("/SaveUser", function(req, res) {
+    /*
+    GET SaveUser :: User (POST body) -> User
+    /SaveUser
+
+    Saves new user in system.
+    Returns null if there is already user with such UserId
+    */
+    console.log("Recieved POST on '/SaveUser'");
+    console.log(req.body);
+
+    if (typeof req.body.UserId !== 'undefined' && typeof req.body.FirstName !== 'undefined' && typeof req.body.LastName !== 'undefined') {
+        // UserId: string
+        // FirstName: string
+        // LastName: string
+        // UserPic: string (url) - unnecessary
+
+        redisClient.hget("Users", req.body.UserId, function(err, user) {
+            if (err) {
+                console.error(err);
+                res.send("null");
+            }
+            else if (user) {
+                res.send("null");
+            }
+            else {
+                redisClient.hset("Users", req.body.UserId, JSON.stringify(req.body), function () {
+                    res.send(req.body);
+                });
+            }
+        });
+    }
+});
+
+//
 app.get('/LoadAllUsers', function(req, res) { // no params
     /*
     GET LoadAllUsers :: User[]
@@ -464,48 +511,60 @@ app.get('/LoadAllUsers', function(req, res) { // no params
     Returns all users in system.
     */
     console.log("Recieved GET on '/LoadAllUsers'");
-    redisClient.hvals("User", function (err, users) {
+    redisClient.hvals("Users", function (err, users) {
         if (err) {
             console.error(err);
             res.send([]);
         }
-        else {
+        else if (users){
+            for (var i = 0; i < users.length; ++i) {
+                users[i] = JSON.parse(users[i]);
+            }
             res.send(users);
+        }
+        else {
+            res.send([]);
         }
     });
 });
 
+//tested
 app.get('/LoadCurrentUser', function(req, res) { // no params
     /*
     GET LoadCurrentUser :: User
     `/LoadCurrentUser`
 
     Returns current user.
+    Returns null if there is no users
     */
     console.log("Recieved GET on '/LoadCurrentUser'");
-    console.log(req.query);
-    redisClient.hvals("User", function (err, users) {
+    redisClient.hvals("Users", function (err, users) {
         if (err) {
             console.error(err);
-            res.send([]);
+            res.send("null");
         }
-        else {
+        else if (users) {
             if (users.length > 0) {
-                res.send(users[0]);
+                res.send(JSON.parse(users[0]));
             }
             else {
                 res.send("null");
             }
         }
+        else {
+            res.send("null");
+        }
     })
 });
 
+//tested
 app.post('/SaveTicket', function(req, res) {
     /*
     POST SaveTicket :: Ticket (POST body) -> Ticket
     `/SaveTicket`
 
-    Saves ticket and returns saved ticked. If save is unsuccessful returns ticket stored in db
+    Saves ticket and returns saved ticked.
+    If save is successful returns true, false otherwise
     */
     console.log("Recieved POST on '/SaveTicket'");
     console.log(req.body);
