@@ -14,7 +14,7 @@ const COLUMN_NAME_PREFIX = "Column";
 // redis connection init
 const redisClient = redis.createClient(cfg.redis);
 // if you'd like to select database 3, instead of 0 (default), call
-redisClient.select(6, function() { /* ... */ });
+// redisClient.select(6, function() { /* ... */ });
 
 redisClient.on('connect', function() {
   console.log('Connected to redis, with config:', cfg.redis)
@@ -101,7 +101,7 @@ app.get('/GetProjects', function (req, res) {  // no params
     });
 });
 
-//tested
+// tested
 app.get('/GetColumnsByProject', function (req, res) { // params: projectId
     /*
     GET GetColumnsByProject :: projectId:string -> Column[]
@@ -120,7 +120,7 @@ app.get('/GetColumnsByProject', function (req, res) { // params: projectId
             else if (projectColIds) {
                 projectColIds = JSON.parse(projectColIds);
                 function requestColumn(i, acc) {
-                    if (i >= 0) {
+                    if (i < projectColIds.length) {
                         redisClient.hget("Columns", projectColIds[i], function (err, column) {
                             if (err) {
                                 console.error(err);
@@ -129,14 +129,14 @@ app.get('/GetColumnsByProject', function (req, res) { // params: projectId
                                 column = JSON.parse(column);
                                 acc.push(column);
                             }
-                            requestColumn(i - 1, acc);
+                            requestColumn(i + 1, acc);
                         });
                     }
                     else {
                         res.send(acc);
                     }
                 }
-                requestColumn(projectColIds.length -1, []);
+                requestColumn(0, []);
             }
             else {
                 res.send([]);
@@ -167,7 +167,7 @@ app.get('/GetTicketsByColumn', function (req, res) { // params: columnId
                 ticketIds = JSON.parse(ticketIds);
 
                 function requestTicket(i, acc) {
-                    if (i >= 0) {
+                    if (i < ticketIds.length) {
                         redisClient.hget("Tickets", ticketIds[i], function (err, ticket) {
                             if (err) {
                                 console.error(err);
@@ -176,14 +176,14 @@ app.get('/GetTicketsByColumn', function (req, res) { // params: columnId
                                 ticket = JSON.parse(ticket);
                                 acc.push(ticket);
                             }
-                            requestTicket(i -1, acc)
+                            requestTicket(i + 1, acc)
                         });
                     }
                     else {
                         res.send(acc);
                     }
                 }
-                requestTicket(ticketIds.length -1, []);
+                requestTicket(0, []);
             }
             else {
                 res.send([]);
@@ -318,10 +318,11 @@ app.post('/MoveTicketToColumn', function (req, res) { // params: fromColumnId, t
                                         else {
                                             destColTicketIds = [];
                                         }
+                                        destColTicketIds = destColTicketIds.filter(function (id) { return id !== req.query.ticketId; });
                                         destColTicketIds.splice(req.query.index, 0, req.query.ticketId);
 
-                                        redisClient.hset("Column-tickets", req.query.toColumnId, JSON.stringify(destColTicketIds), function () {
-                                            redisClient.hset("Column-tickets", req.query.fromColumnId, JSON.stringify(filteredSrcColTicketIds), function () {
+                                        redisClient.hset("Column-tickets", req.query.fromColumnId, JSON.stringify(filteredSrcColTicketIds), function () {
+                                            redisClient.hset("Column-tickets", req.query.toColumnId, JSON.stringify(destColTicketIds), function () {
                                                 res.send("true");
                                             });
                                         });
@@ -472,7 +473,7 @@ app.post('/AddNewProject', function (req, res) { // no params
 //tested
 app.post("/SaveUser", function(req, res) {
     /*
-    GET SaveUser :: User (POST body) -> User
+    POST SaveUser :: User (POST body) -> User
     /SaveUser
 
     Saves new user in system.
@@ -504,7 +505,7 @@ app.post("/SaveUser", function(req, res) {
     }
 });
 
-//
+//tested
 app.get('/LoadAllUsers', function(req, res) { // no params
     /*
     GET LoadAllUsers :: User[]
@@ -651,6 +652,253 @@ app.post('/AddTicket', function(req, res) {
     }
     else {
         res.send("null");
+    }
+});
+
+// tested
+app.post('/DeleteTicket', function (req, res) {
+    /*
+    POST DeleteTicket :: columnId:string -> ticketId:string -> Bool
+    `/DeleteTicket?columnId=<...>&ticketId=<...>`
+
+    Deletes the ticket with specified Id.
+    */
+    console.log("Recieved POST on '/DeleteTicket'");
+    console.log(req.query);
+    if (typeof req.query.ticketId !== 'undefined' && typeof req.query.columnId !== 'undefined') {
+        redisClient.hget("Tickets", req.query.ticketId, function (err, ticket) {
+            if (err) {
+                console.error(err);
+                res.send("false");
+            }
+            else if (ticket) {
+                redisClient.hdel("Tickets", req.query.ticketId, function (err) {
+                    if (err) {
+                        console.error(err);
+                        res.send("false");
+                    }
+                    else {
+                        redisClient.hget("Column-tickets", req.query.columnId, function (err, columnTicketIds) {
+                            if (err) {
+                                console.error(err);
+                                res.send("true"); // ticket already deleted, though links to it still exist
+                            }
+                            else if (columnTicketIds) {
+                                columnTicketIds = JSON.parse(columnTicketIds);
+                                filteredColumnTicketIds = columnTicketIds.filter(function (id) { return id != req.query.ticketId; });
+                                redisClient.hset("Column-tickets", req.query.columnId, JSON.stringify(filteredColumnTicketIds), function (err) {
+                                    if (err) {
+                                        console.error(err);
+                                    }
+                                    res.send("true");
+                                });
+                            }
+                            else {
+                                res.send("true"); // ticket already deleted, though links to it still exist
+                            }
+                        });
+                    }
+                });
+            }
+            else {
+                res.send("false");
+            }
+        });
+    }
+    else {
+        res.send("false");
+    }
+});
+
+//tested
+function deleteColumnRecursive(columnId, success, fail) {
+    redisClient.hget("Columns", columnId, function (err, column) {
+        if (err) {
+            console.error(err);
+            fail();
+        }
+        else if (column) {
+            redisClient.hdel("Columns", columnId, function (err) {
+                if (err) {
+                    console.error(err);
+                    fail();
+                }
+                else {
+                    redisClient.hget("Column-tickets", columnId, function (err, columnTicketIds) {
+                        if (err) {
+                            console.error(err);
+                            success();
+                        }
+                        else if (columnTicketIds) {
+                            columnTicketIds = JSON.parse(columnTicketIds);
+                            function traverseDeleteTickets (i) {
+                                if (i < columnTicketIds.length) {
+                                    redisClient.hdel("Tickets", columnTicketIds[i], function (err) {
+                                        if (err) {
+                                            console.error(err);
+                                        }
+                                        traverseDeleteTickets(i + 1);
+                                    });
+                                }
+                                else {
+                                    redisClient.hdel("Column-tickets", columnId, function (err) {
+                                        if (err) {
+                                            console.error(err);
+                                        }
+                                        success();
+                                    });
+                                }
+                            }
+                            traverseDeleteTickets(0);
+                        }
+                        else {
+                            success();
+                        }
+                    });
+                }
+            });
+        } else {
+            fail();
+        }
+    });
+}
+
+// tested
+app.post('/DeleteColumn', function (req, res) {
+    /*
+    POST DeleteColumn :: projectId:string -> columnId:string -> Bool
+    `/DeleteColumn?projectId=<...>&columnId=<...>`
+
+    Deletes the column with specified Id.
+    */
+    console.log("Recieved POST on '/DeleteColumn'");
+    console.log(req.query);
+    if (typeof req.query.columnId !== 'undefined' && typeof req.query.projectId !== 'undefined') {
+        function deleteProjectColumnLink () {
+            redisClient.hget("Project-columns", req.query.projectId, function (err, projectColumnIds) {
+                if (err) {
+                    console.error(err);
+                    res.send("true");
+                }
+                else if (projectColumnIds) {
+                    projectColumnIds = JSON.parse(projectColumnIds);
+                    filteredProjectColumnIds = projectColumnIds.filter(function (id) { return id != req.query.columnId; });
+                    redisClient.hset("Project-columns", req.query.projectId, JSON.stringify(filteredProjectColumnIds), function (err) {
+                        if (err) {
+                            console.error(err);
+                        }
+                        res.send("true");
+                    });
+                }
+                else {
+                    res.send("true");
+                }
+            });
+        }
+        deleteColumnRecursive(req.query.columnId, deleteProjectColumnLink, function () {
+            res.send("false");
+        });
+    }
+    else {
+        res.send("false");
+    }
+});
+
+//tested
+app.post('/DeleteProject', function (req, res) {
+    /*
+    POST DeleteProject :: projectId:string -> Bool
+    `/DeleteProject?projectId=<...>`
+
+    Deletes the project with specified Id.
+    */
+    console.log("Recieved POST on '/DeleteProject'");
+    console.log(req.query);
+    if (typeof req.query.projectId !== 'undefined') {
+        redisClient.hget("Projects", req.query.projectId, function (err, project) {
+            if (err) {
+                console.error(err);
+                res.send("false");
+            }
+            else if (project) {
+                redisClient.hdel("Projects", req.query.projectId, function (err) {
+                    if (err) {
+                        console.error(err);
+                        res.send("false");
+                    }
+                    else {
+                        redisClient.hget("Project-columns", req.query.projectId, function (err, projectColumnIds) {
+                            if (err) {
+                                console.error(err);
+                                res.send("true");
+                            }
+                            else if (projectColumnIds) {
+                                projectColumnIds = JSON.parse(projectColumnIds);
+                                function traverseDeleteProjectColumns(i) {
+                                    if (i < projectColumnIds.length) {
+                                        function continuation() {
+                                            traverseDeleteProjectColumns(i + 1);
+                                        }
+                                        deleteColumnRecursive(projectColumnIds[i], continuation, continuation);
+                                    }
+                                    else {
+                                        redisClient.hdel("Project-columns", req.query.projectId, function (err) {
+                                            if (err) {
+                                                console.error(err);
+                                            }
+                                            res.send("true");
+                                        });
+                                    }
+                                 }
+                                traverseDeleteProjectColumns(0);
+                            }
+                            else {
+                                res.send("true");
+                            }
+                        });
+                    }
+                });
+            }
+            else {
+                res.send("false");
+            }
+
+        });
+    }
+    else {
+        res.send("false");
+    }
+});
+
+
+//tested
+app.post('/DeleteUser', function (req, res) {
+    /*
+    POST DeleteUser :: userId:string -> Bool
+    `/DeleteUser?userId=<...>`
+
+    Deletes user with specified Id.
+    */
+    console.log("Recieved POST on '/DeleteUser'");
+    console.log(req.query);
+    if (typeof req.query.userId !== 'undefined') {
+        redisClient.hget("Users", req.query.userId, function (err, user) {
+            if (err) {
+                console.error(err);
+                res.send("false");
+            }
+            else if (user) {
+                redisClient.hdel("Users", req.query.userId, function (err) {
+                    res.send("true");
+                });
+            }
+            else {
+                res.send('false');
+            }
+        });
+    }
+    else {
+        res.send("false");
     }
 });
 
